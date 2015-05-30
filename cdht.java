@@ -1,5 +1,6 @@
 import java.io.*;
 import java.net.*;
+import java.nio.channels.ServerSocketChannel;
 
 public class cdht {
 	private static int SERVER_PORT = 5000;
@@ -23,22 +24,52 @@ public class cdht {
 		String[] inputSplit = null;
 		long lastPing = 0;
 		long currTime = 0;
-		
+		PrintWriter out = null;
+        BufferedReader in = null;
+        ServerSocket serverSocket = null;
+        Socket clientSocket = null;
+        DatagramSocket socket = null;
+
 		// Create a datagram socket for receiving and sending UDP packets
-		DatagramSocket socket = new DatagramSocket(SERVER_PORT + id);
-		
+		try {
+			socket = new DatagramSocket(SERVER_PORT + id);
+        } catch (IOException e) {
+            System.err.println("UDP ERROR: Could not listen on port:" + SERVER_PORT + id);
+            System.exit(1);
+        }
+		// TCP server
+        try {
+        	serverSocket = new ServerSocket(SERVER_PORT + id);
+        } catch (IOException e) {
+            System.err.println("TCP ERROR: Could not listen on port:" + SERVER_PORT + id);
+            System.exit(1);
+        }
+        
+        // Non blocking TCP socket
+        ServerSocketChannel channel = ServerSocketChannel.open();
+        channel.bind(new InetSocketAddress(SERVER_NAME, SERVER_PORT + id));
+        channel.configureBlocking(false);
+        
+        // TCP Client
+        try {
+        	clientSocket = serverSocket.accept();
+        } catch (IOException e) {
+            System.err.println("Accept failed.");
+            System.exit(1);
+        }
+
 		// Read input
 		BufferedReader inFromUser = new BufferedReader(new InputStreamReader(System.in));
-			
+
 		// Server loop
 		while (true) {
 			currTime = System.currentTimeMillis();
-			
+
 			if (inFromUser.ready()) {
 				input = inFromUser.readLine();
 				inputSplit = input.split(" ");
 				int length = inputSplit.length;
-				
+
 				// Input for a file request
 				if (length == 2 && inputSplit[0].equalsIgnoreCase("REQUEST")) {
 					fileRequest(id, s1, inputSplit, socket);
@@ -46,55 +77,54 @@ public class cdht {
 					// Send departure messages to predecessors in TCP
 					InetAddress address = InetAddress.getByName(SERVER_NAME);
 					int port = SERVER_PORT + p1;
-					byte[] buf = ("QUIT " + s1 + ' ' + s2).getBytes(); // Inform predecessors of this peer's former successors
+					byte[] buf = ("QUIT " + s1 + ' ' + s2).getBytes(); 
+					Socket tcpSocket = new Socket(address, port);
+					out = new PrintWriter(tcpSocket.getOutputStream(), true);
 					
-					DatagramPacket quit = new DatagramPacket(buf, buf.length, address, port);
-					socket.send(quit);
-					
-					port = SERVER_PORT + p2;
-					quit = new DatagramPacket(buf, buf.length, address, port);
-					socket.send(quit);
+					out.println("QUIT " + s1 + ' ' + s2); // Inform predecessors of this peer's former successors
+
+					tcpSocket.close();
 				}
 			}
-			
+
 			// Keep pinging the two successors until we get a reply
 			if (currTime - lastPing >= WAIT) {
 				if (!s1Exists) {
 					ping(socket, s1);
 					lastPing = currTime;
 				}
-				
+
 				if (!s2Exists) {
 					ping(socket, s2);
 					lastPing = currTime;
 				}
 			}
-			
+
 			// Create a datagram packet to hold incoming UDP packet.
 			DatagramPacket request = new DatagramPacket(new byte[1024], 1024);
-			
+
 			socket.setSoTimeout(WAIT); // Set a timeout so the run loop can take input
 			try {
 				socket.receive(request);
 			} catch(Exception e) {
 				// Do nothing, we don't want to print unreceived packet exceptions
 			}
-			
+
 			String[] data = new String(request.getData()).trim().split(" ");
 			responseId = request.getPort() - SERVER_PORT;
-			
+
 			// Ping packets
 			if (data[0].equalsIgnoreCase("PING")) {
 				// Send reply
-		        InetAddress address = request.getAddress();
+				InetAddress address = request.getAddress();
 				int port = request.getPort();
 				byte[] buf = "RETURN".getBytes();
-				
+
 				System.out.println("A ping request message was received from Peer " + responseId);
-				
+
 				DatagramPacket reply = new DatagramPacket(buf, buf.length, address, port);
 				socket.send(reply);
-				
+
 				// Check whether predecessors have been set
 				if (p2 == -1) {
 					p2 = p1;
@@ -113,31 +143,31 @@ public class cdht {
 			} else if (data[0].equalsIgnoreCase("RETURN")) {
 				// Add to successors so we no longer need to ping
 				System.out.println("A ping response message was received from Peer " + responseId);
-				
+
 				if (responseId == s1) {
 					s1Exists = true;
 				}
 				if (responseId == s2) {
 					s2Exists = true;
 				}
-				
-			// File request packets
+
+				// File request packets
 			} else if (data[0].equalsIgnoreCase("REQUEST")) {
 				String file = data[1];
 				int fileKey = hash(file);
 				int requestId = Integer.parseInt(data[2]);
-				
+
 				if (id == fileKey) {
 					InetAddress address = InetAddress.getByName(SERVER_NAME);
 					int port = SERVER_PORT + Integer.parseInt(data[2]);
 					byte[] buf = ("FOUND " + file).getBytes();
-					
+
 					System.out.println("File " + file + " is here.");
-					
+
 					// Send out the response
 					DatagramPacket response = new DatagramPacket(buf, buf.length, address, port);
 					socket.send(response);
-					
+
 					System.out.println("A response message, destined for peer " + requestId + ", has been sent.");
 				} else {
 					// Either successor is closer and greater than or equal to the file
@@ -146,39 +176,41 @@ public class cdht {
 						InetAddress address = InetAddress.getByName(SERVER_NAME);
 						int port = SERVER_PORT + s1;
 						byte[] buf = ("REQUEST " + file + ' ' + requestId).getBytes();
-						
+
 						System.out.println("File " + file + " is not stored here.");
-						
+
 						// Forward request to first successor
 						DatagramPacket forward = new DatagramPacket(buf, buf.length, address, port);
 						socket.send(forward);
-						
+
 						System.out.println("File request message has been forwarded to my successor.");
 					} else {
 						// Found
 						System.out.println("File " + file + " is here.");
-						
+
 						InetAddress address = InetAddress.getByName(SERVER_NAME);
 						int port = SERVER_PORT + requestId;
 						byte[] buf = ("FOUND " + file).getBytes();
-						
+
 						// Send out the response
 						DatagramPacket response = new DatagramPacket(buf, buf.length, address, port);
 						socket.send(response);
-						
+
 						System.out.println("A response message, destined for peer " + requestId + ", has been sent.");
 					}
 
 				}
-			
-			// File found packets
+
+				// File found packets
 			} else if (data[0].equalsIgnoreCase("FOUND")) {
 				System.out.println("Received a response message from peer " + responseId + ", which has the file.");
-				
+
+			}
+
 			// Graceful departure request packets
-			} else if (data[0].equalsIgnoreCase("QUIT")) {
+			if (data[0].equalsIgnoreCase("QUIT")) {
 				System.out.println("Peer " + responseId + " will depart from the network.");
-				
+
 				if (s1 == responseId) {
 					// Current peer is first predecessor
 					s1 = Integer.parseInt(data[1]);
@@ -187,24 +219,24 @@ public class cdht {
 					// Second predecessor
 					s2 = Integer.parseInt(data[1]);
 				}
-				
-				
+
+
 				System.out.println("My first successor is now peer " + s1);
 				System.out.println("My second successor is now peer " + s2);
-				
+
 				// Start pinging new successors
 				s1Exists = false;
 				s2Exists = false;
-				
+
 				// Send departure ack to graceful departee
 				InetAddress address = request.getAddress();
 				int port = request.getPort();
 				byte[] buf = "QUIT_ACK".getBytes();
-				
+
 				DatagramPacket reply = new DatagramPacket(buf, buf.length, address, port);
 				socket.send(reply);
-				
-			// Ack of graceful departure
+
+				// Ack of graceful departure
 			} else if (data[0].equalsIgnoreCase("QUIT_ACK")) {
 				if (responseId == p1) {
 					p1Ack = true;
@@ -218,10 +250,11 @@ public class cdht {
 					System.exit(0);
 				}
 			}
+
 		}
 	}
 
-	
+
 	private static void fileRequest(int requestId, int successorId, String[] inputSplit,
 			DatagramSocket socket) throws UnknownHostException, IOException {
 		String file = inputSplit[1];
@@ -229,14 +262,14 @@ public class cdht {
 		int port = SERVER_PORT + successorId;
 		// REQUEST + fileName + requesterId
 		byte[] buf = ("REQUEST " + file + ' ' + requestId).getBytes();
-		
+
 		DatagramPacket forward = new DatagramPacket(buf, buf.length, address, port);
 		socket.send(forward);
-		
+
 		System.out.println("File request message for " + file + " has been sent to my successor.");
 	}
-	
-	
+
+
 	/**
 	 * Convert filename to assignment spec hash value
 	 * 
@@ -259,7 +292,7 @@ public class cdht {
 		InetAddress address = InetAddress.getByName(SERVER_NAME);
 		byte[] buf = "PING".getBytes();
 		DatagramPacket ping = new DatagramPacket(buf, buf.length, address, SERVER_PORT + successorId);
-		
+
 		socket.send(ping);
 	}
 }
