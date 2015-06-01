@@ -41,7 +41,9 @@ public class cdht {
 				
 				// Input for a file request
 				if (length == 2 && inputSplit[0].equalsIgnoreCase("REQUEST")) {
-					fileRequest(id, s1, inputSplit, socket);
+					fileRequest(id, s1, inputSplit[1], socket);
+					
+					System.out.println("File request message for " + inputSplit[1] + " has been sent to my successor.");
 				} else if (length == 1 && inputSplit[0].equalsIgnoreCase("QUIT")) {
 					// Send departure messages to predecessors in TCP
 					InetAddress address = InetAddress.getByName(SERVER_NAME);
@@ -128,30 +130,16 @@ public class cdht {
 				int requestId = Integer.parseInt(data[2]);
 				
 				if (id == fileKey) {
-					InetAddress address = InetAddress.getByName(SERVER_NAME);
-					int port = SERVER_PORT + Integer.parseInt(data[2]);
-					byte[] buf = ("FOUND " + file).getBytes();
-					
-					System.out.println("File " + file + " is here.");
-					
-					// Send out the response
-					DatagramPacket response = new DatagramPacket(buf, buf.length, address, port);
-					socket.send(response);
-					
+					fileRequest(requestId, Integer.parseInt(data[2]), file, socket);
+
 					System.out.println("A response message, destined for peer " + requestId + ", has been sent.");
 				} else {
 					// Either successor is closer and greater than or equal to the file
 					if ((s1 >= fileKey && s1 - fileKey < Math.abs(id - fileKey)) || 
 							(s2 >= fileKey && s2 - fileKey < Math.abs(id - fileKey))) {
-						InetAddress address = InetAddress.getByName(SERVER_NAME);
-						int port = SERVER_PORT + s1;
-						byte[] buf = ("REQUEST " + file + ' ' + requestId).getBytes();
-						
 						System.out.println("File " + file + " is not stored here.");
 						
-						// Forward request to first successor
-						DatagramPacket forward = new DatagramPacket(buf, buf.length, address, port);
-						socket.send(forward);
+						fileRequest(requestId, s1, file, socket);
 						
 						System.out.println("File request message has been forwarded to my successor.");
 					} else {
@@ -222,9 +210,8 @@ public class cdht {
 	}
 
 	
-	private static void fileRequest(int requestId, int successorId, String[] inputSplit,
+	private static void fileRequest(int requestId, int successorId, String file,
 			DatagramSocket socket) throws UnknownHostException, IOException {
-		String file = inputSplit[1];
 		InetAddress address = InetAddress.getByName(SERVER_NAME);
 		int port = SERVER_PORT + successorId;
 		// REQUEST + fileName + requesterId
@@ -232,8 +219,6 @@ public class cdht {
 		
 		DatagramPacket forward = new DatagramPacket(buf, buf.length, address, port);
 		socket.send(forward);
-		
-		System.out.println("File request message for " + file + " has been sent to my successor.");
 	}
 	
 	
